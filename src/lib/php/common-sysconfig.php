@@ -391,7 +391,7 @@ function Populate_sysconfig()
   $contextDesc = _("List of allowed hosts for upload, separated by \":\" (colon)");
   $valueArray[$variable] = array("'$variable'", "'$contextValue'", "'$contextNamePrompt'",
     strval(CONFIG_TYPE_TEXT), "'UploadFromServer'", "2", "'$contextDesc'", "null", "null");
-
+  
   /*  SMTP config */
   $variable = "SMTPHostName";
   $smtpHostPrompt = _('SMTP Host Name');

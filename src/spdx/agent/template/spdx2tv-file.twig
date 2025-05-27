@@ -35,6 +35,9 @@ LicenseInfoInFile: NOASSERTION
 {% if licenseList[res].licenseObj.shortName starts with 'LicenseRef-' %}
   {% set licId=licenseList[res].licenseObj.shortName %}
 {%- endif ~%}
+{% if EnableOsselotExport and not (licId starts with 'LicenseRef-') %}
+  {% set licId = "LicenseRef-#{licId}" %}
+{% endif %}
 LicenseInfoInFile: {{ licId|replace({' ':'-'})}}
 {% endfor %}
 {% endif %}
