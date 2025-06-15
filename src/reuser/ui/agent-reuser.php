@@ -18,6 +18,7 @@ use Fossology\Lib\Dao\PackageDao;
 use Fossology\Lib\Dao\UploadDao;
 use Fossology\Lib\Plugin\AgentPlugin;
 use Fossology\Lib\Util\StringOperation;
+use Fossology\Lib\Util\OsselotLookupHelper;
 use Fossology\Scancode\Ui\ScancodesAgentPlugin;
 use Symfony\Component\HttpFoundation\Request;
 
@@ -99,51 +100,184 @@ class ReuserAgentPlugin extends AgentPlugin
    * @return int Job queue id
    */
   public function scheduleAgent($jobId, $uploadId, &$errorMsg, $request)
-  {
-    $reuseUploadPair = explode(',',
-      $request->get(self::UPLOAD_TO_REUSE_SELECTOR_NAME), 2);
-    if (count($reuseUploadPair) == 2) {
-      list($reuseUploadId, $reuseGroupId) = $reuseUploadPair;
-    } else {
-      $errorMsg .= 'no reuse upload id given';
-      return - 1;
+{
+    // Check if this is OSSelot reuse
+    if ($request->get('reuseSource') === 'osselot') {
+        return $this->scheduleOsselotImport($jobId, $uploadId, $errorMsg, $request);
     }
+    
+    // Original local reuse logic
+    $reuseUploadPair = explode(',', $request->get(self::UPLOAD_TO_REUSE_SELECTOR_NAME), 2);
+    if (count($reuseUploadPair) == 2) {
+        list($reuseUploadId, $reuseGroupId) = $reuseUploadPair;
+    } else {
+        $errorMsg .= 'no reuse upload id given';
+        return -1;
+    }
+    
+    // Continue with original reuse logic...
     $groupId = $request->get('groupId', Auth::getGroupId());
-
     $getReuseValue = $request->get(self::REUSE_MODE) ?: array();
     $reuserDependencies = array("agent_adj2nest");
-
+    
     $reuseMode = UploadDao::REUSE_NONE;
     foreach ($getReuseValue as $currentReuseValue) {
-      switch ($currentReuseValue) {
-        case 'reuseMain':
-          $reuseMode |= UploadDao::REUSE_MAIN;
-          break;
-        case 'reuseEnhanced':
-          $reuseMode |= UploadDao::REUSE_ENHANCED;
-          break;
-        case 'reuseConf':
-          $reuseMode |= UploadDao::REUSE_CONF;
-          break;
-        case 'reuseCopyright':
-          $reuseMode |= UploadDao::REUSE_COPYRIGHT;
-          break;
-      }
+        switch ($currentReuseValue) {
+            case 'reuseMain':
+                $reuseMode |= UploadDao::REUSE_MAIN;
+                break;
+            case 'reuseEnhanced':
+                $reuseMode |= UploadDao::REUSE_ENHANCED;
+                break;
+            case 'reuseConf':
+                $reuseMode |= UploadDao::REUSE_CONF;
+                break;
+            case 'reuseCopyright':
+                $reuseMode |= UploadDao::REUSE_COPYRIGHT;
+                break;
+        }
     }
-
+    
     list($agentDeps, $scancodeDeps) = $this->getReuserDependencies($request);
     $reuserDependencies = array_unique(array_merge($reuserDependencies, $agentDeps));
     if (!empty($scancodeDeps)) {
-      $reuserDependencies[] = $scancodeDeps;
+        $reuserDependencies[] = $scancodeDeps;
     }
+    
+    $this->createPackageLink($uploadId, $reuseUploadId, $groupId, $reuseGroupId, $reuseMode);
+    
+    return $this->doAgentAdd($jobId, $uploadId, $errorMsg, $reuserDependencies, $uploadId, null, $request);
+}
 
-    $this->createPackageLink($uploadId, $reuseUploadId, $groupId, $reuseGroupId,
-      $reuseMode);
-
-    return $this->doAgentAdd($jobId, $uploadId, $errorMsg,
-      $reuserDependencies, $uploadId, null, $request);
-  }
-
+/**
+ * Schedule OSSelot import using ReportImport agent
+ */
+private function scheduleOsselotImport($jobId, $uploadId, &$errorMsg, $request)
+{
+    $pkg = $request->get('osselotPackage');
+    $versions = $request->get('osselotVersions'); // Note: plural as sent from form
+    
+    if (empty($pkg)) {
+        $errorMsg .= 'OSSelot package name required';
+        return -1;
+    }
+    
+    if (empty($versions)) {
+        $errorMsg .= 'OSSelot package version required';
+        return -1;
+    }
+    
+    // Parse versions (comma-separated string)
+    $versionArray = array_filter(array_map('trim', explode(',', $versions)));
+    if (empty($versionArray)) {
+        $errorMsg .= 'No valid OSSelot versions selected';
+        return -1;
+    }
+    
+    $ver = $versionArray[0]; // Use first version for now
+    
+    try {
+        $helper = new OsselotLookupHelper();
+        $rdfContent = $helper->fetchSpdxFile($pkg, $ver);
+        if (!$rdfContent) {
+            $errorMsg .= "OSSelot SPDX fetch failed for $pkg:$ver";
+            return -1;
+        }
+    } catch (\Exception $e) {
+        $errorMsg .= 'OSSelot lookup error: ' . $e->getMessage();
+        return -1;
+    }
+    
+    // Create temporary file for the SPDX content
+    $tempFile = tmpfile();
+    if (!$tempFile) {
+        $errorMsg .= 'Failed to create temporary file for SPDX content';
+        return -1;
+    }
+    
+    fwrite($tempFile, $rdfContent);
+    $tempFilePath = stream_get_meta_data($tempFile)['uri'];
+    
+    try {
+        // Get ReportImport plugin
+        $reportImportPlugin = plugin_find('ui_reportImport');
+        if (!$reportImportPlugin) {
+            $errorMsg .= 'ReportImport plugin not found - ensure it is installed and enabled';
+            fclose($tempFile);
+            return -1;
+        }
+        
+        // Create a new request with OSSelot-specific parameters
+        $importRequest = new Request();
+        
+        // Map OSSelot parameters to ReportImport parameters
+        $importRequest->request->set('licenseCreation', 
+            $request->get('osselotAddNewLicensesAs', 'candidate'));
+        $importRequest->request->set('licenseMatch', 
+            $request->get('osselotLicenseMatch', 'spdxid'));
+        
+        // Handle license info options
+        if ($request->get('osselotAddLicenseInfoFromInfoInFile')) {
+            $importRequest->request->set('licenseInfoInFile', 'on');
+        }
+        if ($request->get('osselotAddLicenseInfoFromConcluded')) {
+            $importRequest->request->set('licenseConcluded', 'on');
+        }
+        
+        // Handle decision options
+        if ($request->get('osselotAddConcludedAsDecisions')) {
+            $importRequest->request->set('addConcludedAsDecisions', 'on');
+            if ($request->get('osselotAddConcludedAsDecisionsOverwrite')) {
+                $importRequest->request->set('overwriteDecisions', 'on');
+            }
+            if ($request->get('osselotAddConcludedAsDecisionsTBD')) {
+                $importRequest->request->set('importToDiscussed', 'on');
+            }
+        }
+        
+        // Handle copyright option
+        if ($request->get('osselotAddCopyrights')) {
+            $importRequest->request->set('copyCopyrights', 'on');
+        }
+        
+        // Create a temporary file array that looks like $_FILES
+        $reportFile = [
+            'name' => $pkg . '_' . $ver . '.spdx.rdf',
+            'type' => 'application/rdf+xml',
+            'tmp_name' => $tempFilePath,
+            'error' => 0,
+            'size' => strlen($rdfContent)
+        ];
+        
+        // Check if the plugin has the runImport method
+        if (!method_exists($reportImportPlugin, 'runImport')) {
+            $errorMsg .= 'ReportImport plugin does not support runImport method';
+            fclose($tempFile);
+            return -1;
+        }
+        
+        // Run the import
+        $result = $reportImportPlugin->runImport($uploadId, $reportFile, $importRequest);
+        
+        // Clean up temp file
+        fclose($tempFile);
+        
+        if (is_array($result) && count($result) >= 2) {
+            list($importJobId, $importJobQueueId) = $result;
+            return $importJobQueueId;
+        } else {
+            $errorMsg .= 'OSSelot import failed: Invalid response from ReportImport plugin';
+            return -1;
+        }
+        
+    } catch (\Exception $e) {
+        $errorMsg .= 'OSSelot import failed: ' . $e->getMessage();
+        if (isset($tempFile) && is_resource($tempFile)) {
+            fclose($tempFile);
+        }
+        return -1;
+    }
+}
   /**
    * @brief Create links between old and new upload
    * @param int $uploadId

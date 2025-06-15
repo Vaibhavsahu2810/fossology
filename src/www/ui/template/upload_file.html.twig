@@ -150,54 +150,126 @@
       });
     }
 
-    function updateReuseIds(index, name, element, navContentDom) {
-      element.find("#reuseSearchInFolder").attr('id', `reuseSearchInFolder${index}`);
-      element.find("label[for='reuseSearchInFolder']").attr('for', `reuseSearchInFolder${index}`);
-      element.find("#reuseFolderSelectorName").attr('id', `reuseFolderSelectorName${index}`);
-      element.find("label[for='reuseFolderSelectorName']").attr('for', `reuseFolderSelectorName${index}`);
-      element.find("#uploadToReuse").attr('id', `uploadToReuse${index}`);
-      element.find("label[for='uploadToReuse']").attr('for', `uploadToReuse${index}`);
-      element.find("input,select").each(function (){
-        let fieldName = $(this).attr('name');
-        if (fieldName) {
-          if (fieldName.endsWith("[]")) {
-            $(this).attr('name', fieldName.replace("[]", `[${name}][]`));
-          } else {
-            $(this).attr('name', `${fieldName}[${name}]`)
-          }
-        }
-      });
-      element.find(`#reuseFolderSelectorName${index}`).select2({
-        width: 'style',
-        dropdownAutoWidth : true,
-        dropdownParent: navContentDom
-      });
-      element.find(`#uploadToReuse${index}`).select2({
-        "placeholder": "Select upload to reuse",
-        width: 'style',
-        dropdownAutoWidth : true,
-        dropdownParent: navContentDom
-      });
-    }
-    function addNavItems(index, name, navItemDom, navContentDom) {
-      const navItem = $(`<a class='nav-link flex-sm-fill text-truncate' id='reuse-name-${index}' data-toggle='pill' href='#reuse-content-${index}' role='tab' aria-controls='reuse-content-${index}' aria-selected='false'>`);
-      navItem.append(name);
-
-      const panelContentProvider = $("#hiddenFormHolder").find("div.form-group");
-      const clonedPanel = panelContentProvider.clone();
-      updateReuseIds(index, name, clonedPanel, navContentDom);
-      const navPanel = $("<div class='container-fluid'>");
-      navPanel.append(clonedPanel);
-
-      const navContent = $(`<div class='tab-pane fade' id='reuse-content-${index}' role='tabpanel' aria-labelledby='reuse-name-${index}'>`);
-      navContent.append(navPanel);
-      if (index === 0) {
-        navItem.addClass("active").attr('aria-selected', true);
-        navContent.addClass("show active");
+function updateReuseIds(index, name, element, navContentDom) {
+  console.log(`Updating reuse IDs for index ${index}, name: ${name}`);
+  
+  element.find("#reuseSearchInFolder").attr('id', `reuseSearchInFolder${index}`);
+  element.find("label[for='reuseSearchInFolder']").attr('for', `reuseSearchInFolder${index}`);
+  element.find("#reuseFolderSelectorName").attr('id', `reuseFolderSelectorName${index}`);
+  element.find("label[for='reuseFolderSelectorName']").attr('for', `reuseFolderSelectorName${index}`);
+  element.find("#uploadToReuse").attr('id', `uploadToReuse${index}`);
+  element.find("label[for='uploadToReuse']").attr('for', `uploadToReuse${index}`);
+  
+  const reuseSource = element.find("#reuse-source");
+  if (reuseSource.length > 0) {
+    // Store the current value before changing ID
+    const currentValue = reuseSource.val();
+    reuseSource.attr('id', `reuse-source${index}`);
+    reuseSource.val(currentValue);
+    console.log(`Updated reuse-source to reuse-source${index}, value: ${currentValue}`);
+  }
+  
+  const osselotPackage = element.find("#osselot-package");
+  if (osselotPackage.length > 0) {
+    osselotPackage.attr('id', `osselot-package${index}`);
+    console.log(`Updated osselot-package to osselot-package${index}`);
+  }
+  
+  const osselotFetchVersions = element.find("#osselot-fetch-versions");
+  if (osselotFetchVersions.length > 0) {
+    osselotFetchVersions.attr('id', `osselot-fetch-versions${index}`);
+    console.log(`Updated osselot-fetch-versions to osselot-fetch-versions${index}`);
+  }
+  
+  const osselotVersionCheckboxes = element.find("#osselot-version-checkboxes");
+  if (osselotVersionCheckboxes.length > 0) {
+    osselotVersionCheckboxes.attr('id', `osselot-version-checkboxes${index}`);
+    console.log(`Updated osselot-version-checkboxes to osselot-version-checkboxes${index}`);
+  }
+  
+  const osselotVersionsHidden = element.find("#osselot-versions-hidden");
+  if (osselotVersionsHidden.length > 0) {
+    osselotVersionsHidden.attr('id', `osselot-versions-hidden${index}`);
+    console.log(`Updated osselot-versions-hidden to osselot-versions-hidden${index}`);
+  }
+  
+  const localReuseSection = element.find("#local-reuse-section");
+  if (localReuseSection.length > 0) {
+    localReuseSection.attr('id', `local-reuse-section${index}`);
+    console.log(`Updated local-reuse-section to local-reuse-section${index}`);
+  }
+  
+  const osselotReuseSection = element.find("#osselot-reuse-section");
+  if (osselotReuseSection.length > 0) {
+    osselotReuseSection.attr('id', `osselot-reuse-section${index}`);
+    console.log(`Updated osselot-reuse-section to osselot-reuse-section${index}`);
+  }
+  
+  element.find("input,select").each(function (){
+    let fieldName = $(this).attr('name');
+    if (fieldName) {
+      if (fieldName.endsWith("[]")) {
+        $(this).attr('name', fieldName.replace("[]", `[${name}][]`));
+      } else {
+        $(this).attr('name', `${fieldName}[${name}]`)
       }
-      navItemDom.append(navItem);
-      navContentDom.append(navContent);
     }
+  });
+  
+  const folderSelector = element.find(`#reuseFolderSelectorName${index}`);
+  if (folderSelector.length > 0) {
+    folderSelector.select2({
+      width: 'style',
+      dropdownAutoWidth : true,
+      dropdownParent: navContentDom
+    });
+  }
+  
+  const uploadSelector = element.find(`#uploadToReuse${index}`);
+  if (uploadSelector.length > 0) {
+    uploadSelector.select2({
+      "placeholder": "Select upload to reuse",
+      width: 'style',
+      dropdownAutoWidth : true,
+      dropdownParent: navContentDom
+    });
+  }
+  
+  console.log(`Finished updating reuse IDs for index ${index}`);
+}
+
+function addNavItems(index, name, navItemDom, navContentDom) {
+  const navItem = $(`<a class='nav-link flex-sm-fill text-truncate' id='reuse-name-${index}' data-toggle='pill' href='#reuse-content-${index}' role='tab' aria-controls='reuse-content-${index}' aria-selected='false'>`);
+  navItem.append(name);
+
+  const panelContentProvider = $("#hiddenFormHolder").find("li").first();
+  
+  if (panelContentProvider.length === 0) {
+    console.error("No reuse content found in hiddenFormHolder");
+    return;
+  }
+  
+  const clonedPanel = panelContentProvider.clone();
+  updateReuseIds(index, name, clonedPanel, navContentDom);
+  
+  const navPanel = $("<div class='container-fluid'>");
+  navPanel.append(clonedPanel);
+
+  const navContent = $(`<div class='tab-pane fade' id='reuse-content-${index}' role='tabpanel' aria-labelledby='reuse-name-${index}'>`);
+  navContent.append(navPanel);
+  
+  if (index === 0) {
+    navItem.addClass("active").attr('aria-selected', true);
+    navContent.addClass("show active");
+  }
+  
+  navItemDom.append(navItem);
+  navContentDom.append(navContent);
+  
+  if (typeof window.initializeOsselotForIndex === 'function') {
+    window.initializeOsselotForIndex(index);
+  }
+}
     $("#fileUploader").on("change", function(e) {
       checkDuplicateUploadWarning(e);
 

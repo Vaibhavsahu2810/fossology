@@ -11,6 +11,7 @@ namespace Fossology\UI\Page;
 use Fossology\Lib\Auth\Auth;
 use Fossology\Lib\UI\MenuHook;
 use Fossology\Reuser\ReuserAgentPlugin;
+use Fossology\Lib\Util\OsselotLookupHelper;
 use Symfony\Component\HttpFoundation\File\Exception\FileException;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpFoundation\Request;
@@ -224,25 +225,66 @@ class UploadFilePage extends UploadPageBase
    * expected values
    */
   private function getRequestForReuse(Request $request, string $originalFileName)
-  {
+{
     $reuseRequest = clone $request;
+
+    // Determine per-file reuseSource
+    $sources = (array)$request->get('reuseSource', []);
+    $reuseSource = '';
+    
+    // Handle both single value and array of sources
+    if (is_array($sources) && isset($sources[$originalFileName])) {
+        $reuseSource = $sources[$originalFileName];
+    } elseif (is_string($sources)) {
+        $reuseSource = $sources;
+    } elseif (!empty($sources)) {
+        $reuseSource = is_array($sources) ? reset($sources) : $sources;
+    }
+
+    if ($reuseSource === 'osselot') {
+        // OSSelot path: copy all osselot params for this file
+        $fields = [
+            'reuseSource', 'osselotPackage', 'osselotVersions', // Note: keep as osselotVersions
+            'osselotAddNewLicensesAs', 'osselotLicenseMatch', 
+            'osselotAddLicenseInfoFromInfoInFile', 'osselotAddLicenseInfoFromConcluded',
+            'osselotAddConcludedAsDecisions', 'osselotAddConcludedAsDecisionsOverwrite',
+            'osselotAddConcludedAsDecisionsTBD', 'osselotAddCopyrights'
+        ];
+        
+        foreach ($fields as $field) {
+            $values = $request->get($field);
+            if ($values !== null) {
+                if (is_array($values) && isset($values[$originalFileName])) {
+                    $reuseRequest->request->set($field, $values[$originalFileName]);
+                } else {
+                    $reuseRequest->request->set($field, $values);
+                }
+            }
+        }
+        
+        // Set the reuse source explicitly
+        $reuseRequest->request->set('reuseSource', 'osselot');
+        return $reuseRequest;
+    }
+
+    // Original local reuse logic
     $reuseSelector = $reuseRequest->get(ReuserAgentPlugin::UPLOAD_TO_REUSE_SELECTOR_NAME);
     $reuseMode = $reuseRequest->get(ReuserAgentPlugin::REUSE_MODE);
 
     if (is_array($reuseSelector) && array_key_exists($originalFileName, $reuseSelector)) {
-      $reuseRequest->request->set(
-        ReuserAgentPlugin::UPLOAD_TO_REUSE_SELECTOR_NAME,
-        $reuseSelector[$originalFileName]
-      );
+        $reuseRequest->request->set(
+            ReuserAgentPlugin::UPLOAD_TO_REUSE_SELECTOR_NAME,
+            $reuseSelector[$originalFileName]
+        );
     }
     if (is_array($reuseMode) && array_key_exists($originalFileName, $reuseMode)) {
-      $reuseRequest->request->set(
-        ReuserAgentPlugin::REUSE_MODE,
-        $reuseMode[$originalFileName]
-      );
+        $reuseRequest->request->set(
+            ReuserAgentPlugin::REUSE_MODE,
+            $reuseMode[$originalFileName]
+        );
     }
     return $reuseRequest;
-  }
+}
 }
 
 register_plugin(new UploadFilePage());

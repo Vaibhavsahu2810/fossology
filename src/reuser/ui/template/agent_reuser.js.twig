@@ -1,49 +1,444 @@
 {# SPDX-FileCopyrightText: © Fossology contributors
+   SPDX-License-Identifier: GPL-2.0-only #}
 
-   SPDX-License-Identifier: GPL-2.0-only
-#}
-function registerFolderSelectorChange() {
+/* global $, sortList, failed */
+
+let osselotVersions = [];      
+
+function registerFolderSelectorChange () {
   $('[id^={{ reuseFolderSelectorName }}]').change(function () {
     const groupIndex = $(this).attr('id').replace('{{ reuseFolderSelectorName }}', '');
-    const folderGroupPair = this.selectedOptions[0].value;
-    reloadUploads('&{{ folderParameterName }}=' + folderGroupPair, groupIndex);
+    const pair       = this.selectedOptions[0].value;
+    reloadUploads('&{{ folderParameterName }}=' + pair, groupIndex);
   });
 }
 
-function reloadUploads(folderGroupPair, groupIndex) {
-  $.getJSON("?mod=plugin_reuser&do=getUploads" + folderGroupPair)
-    .done(function (data) {
-      const packageForReuse = $(`#{{ uploadToReuseSelectorName }}${groupIndex}`);
-      packageForReuse.empty();
-      $.each(data, function (key, value) {
-        const option = document.createElement("option");
-        option.innerHTML = value;
-        option.value = key;
-        packageForReuse.append(option);
-      });
+function reloadUploads (pair, groupIndex) {
+  $.getJSON('?mod=plugin_reuser&do=getUploads' + pair)
+    .done(data => {
+      const sel = $(`#{{ uploadToReuseSelectorName }}${groupIndex}`);
+      sel.empty();
+      $.each(data, (k, v) => sel.append(new Option(v, k)));
       sortList(`#{{ uploadToReuseSelectorName }}${groupIndex} option`);
-    })
-    .fail(failed);
+    }).fail(failed);
 }
 
-function toggleDisabled() {
+function toggleDisabled () {
   $('.reuseSearchInFolder').click(function () {
-    const groupIndex = $(this).attr('id').replace('reuseSearchInFolder', '');
-    const folderSelector = $(`#{{ reuseFolderSelectorName }}${groupIndex}`);
-    folderSelector.prop('disabled', !$(this).prop('checked'));
+    const gi = $(this).attr('id').replace('reuseSearchInFolder', '');
+    const fs = $(`#{{ reuseFolderSelectorName }}${gi}`);
+    fs.prop('disabled', !this.checked);
+    this.checked ? fs.trigger('change') : reloadUploads('', '');
+  });
 
-    if ($(this).prop('checked')) {
-      folderSelector.trigger('change');
+  reloadUploads('', '');
+  registerFolderSelectorChange();
+}
+
+/* ------------------------------------------------------------------ */
+/*                OSSelot-specific UI logic                            */
+/* ------------------------------------------------------------------ */
+
+// Track initialized OSSelot instances to prevent duplicates
+window.osselotInitialized = window.osselotInitialized || {};
+
+function initializeOsselotFields() {
+
+  /*  a) show / hide the two reuse blocks with dynamic IDs  --------- */
+  function toggleReuseSource(index = '') {
+    const reuseSourceId = index !== '' ? `#reuse-source${index}` : '#reuse-source';
+    const localSectionId = index !== '' ? `#local-reuse-section${index}` : '#local-reuse-section';
+    const osselotSectionId = index !== '' ? `#osselot-reuse-section${index}` : '#osselot-reuse-section';
+    
+    const $reuseSource = $(reuseSourceId);
+    
+    // Check if element exists
+    if ($reuseSource.length === 0) {
+      console.error(`Reuse source element not found: ${reuseSourceId}`);
+      return;
+    }
+    
+    const selectedValue = $reuseSource.val();
+    
+    console.log(`Toggle called for index ${index} with value: ${selectedValue}`);
+    
+    // Get the sections
+    const $osselotSection = $(osselotSectionId);
+    const $localSection = $(localSectionId);
+    
+    // Hide both sections first
+    $localSection.hide();
+    $osselotSection.hide();
+    
+    if (selectedValue === 'osselot') {
+      console.log(`Showing OSSelot section for index ${index}`);
+      if ($osselotSection.length > 0) {
+        $osselotSection.show().css('display', 'block');
+        console.log(`OSSelot section shown for index ${index}`);
+      } else {
+        console.warn(`OSSelot section not found for index ${index}`);
+      }
     } else {
-      reloadUploads("", "");
+      console.log(`Showing Local section for index ${index}`);
+      if ($localSection.length > 0) {
+        $localSection.show().css('display', 'block');
+        console.log(`Local section shown for index ${index}`);
+      } else {
+        console.warn(`Local section not found for index ${index}`);
+      }
+    }
+  }
+
+  /*  b) build the check-box list with dynamic IDs  ---------------- */
+  function renderVersionCheckboxes(versions, index = '') {
+    const checkboxId = index !== '' ? `#osselot-version-checkboxes${index}` : '#osselot-version-checkboxes';
+    const $box = $(checkboxId);
+    
+    if ($box.length === 0) {
+      console.warn(`Version checkbox container not found for index ${index}`);
+      return;
+    }
+    
+    $box.empty();
+    
+    if (!versions.length) {
+      $box.append(`<em>No versions found for this package</em>`);
+      return;
+    }
+    
+    let html = '';
+    versions.forEach((version, versionIndex) => {
+      const checkboxId = `osselot-version-${versionIndex}${index ? '-' + index : ''}`;
+      const checkboxName = index !== '' ? `osselotVersionCheckbox[${index}][]` : 'osselotVersionCheckbox[]';
+      html += `<label style="display:block; margin-bottom:5px;">
+                 <input type="checkbox" id="${checkboxId}" 
+                        name="${checkboxName}" value="${version}" 
+                        class="osselot-version-cb" data-index="${index}"> 
+                 ${version}
+               </label>`;
+    });
+    
+    $box.html(html);
+  }
+
+  /*  c) keep hidden input in sync with dynamic IDs  --------------- */
+  function syncHiddenField(index = '') {
+    const hiddenId = index !== '' ? `#osselot-versions-hidden${index}` : '#osselot-versions-hidden';
+    const checkboxName = index !== '' ? `osselotVersionCheckbox[${index}][]` : 'osselotVersionCheckbox[]';
+    const selected = $(`input[name="${checkboxName}"]:checked`).map((_, el) => el.value).get();
+    $(hiddenId).val(selected.join(','));
+  }
+
+  /*  d) AJAX fetch with dynamic IDs  ------------------------------- */
+  function fetchOsselotVersions(index = '') {
+    const packageId = index !== '' ? `#osselot-package${index}` : '#osselot-package';
+    const loadingId = index !== '' ? `#osselot-version-loading${index}` : '#osselot-version-loading';
+    
+    const pkg = $(packageId).val().trim();
+    const $load = $(loadingId);
+
+    if (!pkg) {
+      alert('Please enter a package name');
+      return;
+    }
+
+    $load.show();
+    const checkboxId = index !== '' ? `#osselot-version-checkboxes${index}` : '#osselot-version-checkboxes';
+    $(checkboxId).html('<em>Loading...</em>');
+
+    $.ajax({
+      url: '?mod=plugin_reuser&do=getOsselotVersions',
+      method: 'GET',
+      data: { pkg: pkg },
+      dataType: 'json',
+      success: function(data) {
+        const versions = Array.isArray(data) ? data : [];
+        renderVersionCheckboxes(versions, index);
+        syncHiddenField(index);
+      },
+      error: function(xhr, status, error) {
+        $(checkboxId).html('<em>Error loading versions: ' + error + '</em>');
+        console.error(`Failed to fetch OSSelot versions for index ${index}: ${error}`);
+      },
+      complete: function() {
+        $load.hide();
+      }
+    });
+  }
+
+  /*  e) Setup event handlers for dynamic elements  ----------------- */  
+  function setupOsselotEvents(index = '') {
+    const reuseSourceId = index !== '' ? `reuse-source${index}` : 'reuse-source';
+    const packageId = index !== '' ? `osselot-package${index}` : 'osselot-package';
+    const fetchButtonId = index !== '' ? `osselot-fetch-versions${index}` : 'osselot-fetch-versions';
+    
+    console.log(`Setting up OSSelot events for index ${index}`);
+    
+    // Use unique namespace for each index to avoid conflicts
+    const namespace = index !== '' ? `.osselot${index}` : '.osselot';
+    
+    // Remove ALL existing handlers for this namespace
+    $(document).off(namespace);
+    
+    // Check if element exists before setting up events
+    const $reuseSource = $(`#${reuseSourceId}`);
+    if ($reuseSource.length === 0) {
+      console.error(`Reuse source element not found: #${reuseSourceId}`);
+      return;
+    }
+    
+    // Use event delegation to handle dynamically created elements
+    $(document).on(`change${namespace}`, `#${reuseSourceId}`, function() {
+      const selectedValue = $(this).val();
+      console.log(`Reuse source changed for index ${index} to: ${selectedValue}`);
+      toggleReuseSource(index);
+    });
+    
+    // Package name input and fetch button - combined handler
+    $(document).on(`click${namespace} keypress${namespace}`, `#${packageId}, #${fetchButtonId}`, function(e) {
+      if (e.type === 'click' || e.which === 13) {
+        e.preventDefault();
+        fetchOsselotVersions(index);
+      }
+    });
+    
+    console.log(`OSSelot events setup complete for index ${index}`);
+  }
+
+  // Enhanced test function with better error handling
+  window.testToggle = function(index, value) {
+    const reuseSourceId = index !== '' ? `#reuse-source${index}` : '#reuse-source';
+    const $element = $(reuseSourceId);
+    
+    if ($element.length === 0) {
+      console.error(`Cannot test toggle: element ${reuseSourceId} not found`);
+      return;
+    }
+    
+    console.log(`Testing toggle for index ${index} with value ${value}`);
+    $element.val(value).trigger('change');
+    console.log(`Manually set reuse source to ${value} for index ${index}`);
+  };
+
+  // Version checkbox change handler (global) - updated to handle dynamic names
+  $(document).on('change', 'input[name*="osselotVersionCheckbox"]', function() {
+    // Extract index from the name attribute
+    const name = $(this).attr('name');
+    let index = '';
+    
+    if (name.includes('[') && name.includes(']')) {
+      const match = name.match(/\[(\d+)\]/);
+      if (match) {
+        index = match[1];
+      }
+    }
+    
+    syncHiddenField(index);
+  });
+
+  // Initialize for existing elements (if any) - only once
+  if (!window.osselotInitialized['']) {
+    setupOsselotEvents();
+    window.osselotInitialized[''] = true;
+  }
+  
+  // Global function to be called when new elements are added
+  window.initializeOsselotForIndex = function(index) {
+    // Prevent duplicate initialization
+    if (window.osselotInitialized[index]) {
+      console.log(`OSSelot already initialized for index ${index}, skipping...`);
+      return;
+    }
+    
+    console.log(`Initializing OSSelot for index ${index}`);
+    setupOsselotEvents(index);
+    
+    // Initialize toggle state after a short delay to ensure DOM is ready
+    setTimeout(() => {
+      console.log(`Initializing toggle state for index ${index}`);
+      const reuseSourceId = index !== '' ? `#reuse-source${index}` : '#reuse-source';
+      $(reuseSourceId).trigger('change');
+    }, 150);
+    
+    // Mark as initialized
+    window.osselotInitialized[index] = true;
+    console.log(`OSSelot initialization complete for index ${index}`);
+  };
+
+  // Cleanup function to reset initialization state if needed
+  window.resetOsselotInitialization = function(index = null) {
+    if (index !== null) {
+      delete window.osselotInitialized[index];
+      console.log(`Reset OSSelot initialization for index ${index}`);
+    } else {
+      window.osselotInitialized = {};
+      console.log(`Reset all OSSelot initializations`);
+    }
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*                        ID Update Functions                         */
+/* ------------------------------------------------------------------ */
+
+function updateReuseIds(index, name, element, navContentDom) {
+  console.log(`Updating reuse IDs for index ${index}, name: ${name}`);
+  
+  // Update basic reuse IDs
+  element.find("#reuseSearchInFolder").attr('id', `reuseSearchInFolder${index}`);
+  element.find("label[for='reuseSearchInFolder']").attr('for', `reuseSearchInFolder${index}`);
+  element.find("#reuseFolderSelectorName").attr('id', `reuseFolderSelectorName${index}`);
+  element.find("label[for='reuseFolderSelectorName']").attr('for', `reuseFolderSelectorName${index}`);
+  element.find("#uploadToReuse").attr('id', `uploadToReuse${index}`);
+  element.find("label[for='uploadToReuse']").attr('for', `uploadToReuse${index}`);
+  
+  // Update OSSelot specific IDs
+  const reuseSource = element.find("#reuse-source");
+  if (reuseSource.length > 0) {
+    // Store the current value before changing ID
+    const currentValue = reuseSource.val();
+    reuseSource.attr('id', `reuse-source${index}`);
+    // Restore the value after ID change
+    reuseSource.val(currentValue);
+    console.log(`Updated reuse-source to reuse-source${index}, value: ${currentValue}`);
+  }
+  
+  const osselotPackage = element.find("#osselot-package");
+  if (osselotPackage.length > 0) {
+    osselotPackage.attr('id', `osselot-package${index}`);
+    console.log(`Updated osselot-package to osselot-package${index}`);
+  }
+  
+  const osselotFetchVersions = element.find("#osselot-fetch-versions");
+  if (osselotFetchVersions.length > 0) {
+    osselotFetchVersions.attr('id', `osselot-fetch-versions${index}`);
+    console.log(`Updated osselot-fetch-versions to osselot-fetch-versions${index}`);
+  }
+  
+  const osselotVersionCheckboxes = element.find("#osselot-version-checkboxes");
+  if (osselotVersionCheckboxes.length > 0) {
+    osselotVersionCheckboxes.attr('id', `osselot-version-checkboxes${index}`);
+    console.log(`Updated osselot-version-checkboxes to osselot-version-checkboxes${index}`);
+  }
+  
+  const osselotVersionsHidden = element.find("#osselot-versions-hidden");
+  if (osselotVersionsHidden.length > 0) {
+    osselotVersionsHidden.attr('id', `osselot-versions-hidden${index}`);
+    console.log(`Updated osselot-versions-hidden to osselot-versions-hidden${index}`);
+  }
+  
+  const osselotVersionLoading = element.find("#osselot-version-loading");
+  if (osselotVersionLoading.length > 0) {
+    osselotVersionLoading.attr('id', `osselot-version-loading${index}`);
+    console.log(`Updated osselot-version-loading to osselot-version-loading${index}`);
+  }
+  
+  const localReuseSection = element.find("#local-reuse-section");
+  if (localReuseSection.length > 0) {
+    localReuseSection.attr('id', `local-reuse-section${index}`);
+    console.log(`Updated local-reuse-section to local-reuse-section${index}`);
+  }
+  
+  const osselotReuseSection = element.find("#osselot-reuse-section");
+  if (osselotReuseSection.length > 0) {
+    osselotReuseSection.attr('id', `osselot-reuse-section${index}`);
+    console.log(`Updated osselot-reuse-section to osselot-reuse-section${index}`);
+  }
+  
+  // Update form field names
+  element.find("input,select").each(function (){
+    let fieldName = $(this).attr('name');
+    if (fieldName) {
+      if (fieldName.endsWith("[]")) {
+        $(this).attr('name', fieldName.replace("[]", `[${name}][]`));
+      } else {
+        $(this).attr('name', `${fieldName}[${name}]`)
+      }
     }
   });
-
-  reloadUploads("", "");
-  registerFolderSelectorChange();
+  
+  // Initialize select2 dropdowns
+  const folderSelector = element.find(`#reuseFolderSelectorName${index}`);
+  if (folderSelector.length > 0) {
+    folderSelector.select2({
+      width: 'style',
+      dropdownAutoWidth : true,
+      dropdownParent: navContentDom
+    });
+  }
+  
+  const uploadSelector = element.find(`#uploadToReuse${index}`);
+  if (uploadSelector.length > 0) {
+    uploadSelector.select2({
+      "placeholder": "Select upload to reuse",
+      width: 'style',
+      dropdownAutoWidth : true,
+      dropdownParent: navContentDom
+    });
+  }
+  
+  console.log(`Finished updating reuse IDs for index ${index}`);
 }
 
 $(document).ready(function () {
   toggleDisabled();
+  initializeOsselotFields();
+  
+  // Reset OSSelot initialization state on page load
+  window.osselotInitialized = {};
+  
+  // Re-initialize OSSelot for all panels when files are selected
+  $("#fileUploader").on("change", function(e) {
+    // Reset initialization tracking
+    window.osselotInitialized = {};
+    
+    // Get the files first
+    const allFiles = e.target.files;
+    
+    // Clear existing content
+    var holder = $("#uploaddescriptions");
+    holder.html("");
+    
+    // Handle collapse for many files
+    if (allFiles.length > 10) {
+      $("#collapseDescription").show();
+      $("#uploaddescriptions").collapse('hide');
+    }
+    
+    const reuseNameTab = $("#reuse-name-tab");
+    const reuseTabContent = $("#reuse-tab-content");
+    reuseNameTab.html("");
+    reuseTabContent.html("");
+    
+    // Process each file
+    for (let i = 0; i < allFiles.length; i++) {
+      const val = allFiles[i];
+      
+      // Create description card
+      const tt = $("<h6 class='card-title'>").append(val.name);
+      let formg = $("<div class='form-group'>");
+      const ll = $(`<label for='desc${i}' class='card-text'>`).append("(Optional) Enter a description of this file:");
+      formg.append(ll).append(`<input type='text' class='form-control' name='descriptionInputName[${i}]' id='desc${i}'>`);
+      let body = $("<div class='card-body'>");
+      body.append(tt).append(formg);
+      let html = $("<div class='card'>");
+      html.append(body);
+      holder.append(html);
+      
+      // Add navigation items for reuse modal
+      addNavItems(i, val.name, reuseNameTab, reuseTabContent);
+    }
+    
+    // Initialize OSSelot for all new panels after DOM is fully updated
+    setTimeout(function() {
+      for (let i = 0; i < allFiles.length; i++) {
+        if (typeof window.initializeOsselotForIndex === 'function') {
+          console.log(`Calling initializeOsselotForIndex for ${i}`);
+          window.initializeOsselotForIndex(i);
+        }
+      }
+    }, 300);
+    
+    toggleDisabled();
+  });
 });
-

@@ -1,12 +1,9 @@
 <?php
 /*
- SPDX-FileCopyrightText: © 2014-2018 Siemens AG
-
+ SPDX-FileCopyrightText: © Fossology contributors
  SPDX-License-Identifier: GPL-2.0-only
 */
-/**
- * @file
- */
+
 namespace Fossology\Reuser;
 
 use Fossology\Lib\Auth\Auth;
@@ -15,6 +12,7 @@ use Fossology\Lib\Plugin\DefaultPlugin;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Fossology\Lib\Util\OsselotLookupHelper;
 
 include_once(__DIR__ . "/../agent/version.php");
 
@@ -49,148 +47,130 @@ class ReuserPlugin extends DefaultPlugin
     $this->folderDao = $this->getObject('dao.folder');
   }
 
-  /**
-   * @brief Get all uploads accessible to curent user
-   *
-   * Gets all folders accessible by current user and iterate them. Find every
-   * upload with in that folder and add data from prepareFolderUploads().
-   * @return array Key as upload id
-   */
-  function getAllUploads()
-  {
-    $allFolder = $this->folderDao->getAllFolderIds();
-    $result = array();
-    for ($i=0; $i < sizeof($allFolder); $i++) {
-      $listObject = $this->prepareFolderUploads($allFolder[$i]);
-      foreach ($listObject as $key => $value) {
-        $result[explode(",",$key)[0]] = $value;
-      }
-    }
-    return $result;
-  }
+    /**
+     * Handle AJAX calls for local uploads & OSSelot version lookup
+     */
+    protected function handle(Request $request)
+    {
+        $this->folderDao->ensureTopLevelFolder();
+        $ajax = $request->get('do');
 
-  /**
-   * @copydoc Fossology::Lib::Plugin::DefaultPlugin::handle()
-   * @see Fossology::Lib::Plugin::DefaultPlugin::handle()
-   */
-  protected function handle(Request $request)
-  {
-    $this->folderDao->ensureTopLevelFolder();
-    list($folderId, $trustGroupId) = $this->getFolderIdAndTrustGroup($request->get(self::FOLDER_PARAMETER_NAME));
-    $ajaxMethodName = $request->get('do');
+        if ($ajax === 'getUploads') {
+            list($fid, $tgid) = $this->getFolderIdAndTrustGroup($request->get(self::FOLDER_PARAMETER_NAME, ''));
+            $uploads = (empty($fid) || empty($tgid))
+                ? $this->getAllUploads()
+                : $this->prepareFolderUploads($fid, $tgid);
+            return new JsonResponse($uploads, JsonResponse::HTTP_OK);
+        }
 
-    if ($ajaxMethodName == "getUploads") {
-      $uploadsById = "";
-      if (empty($folderId) || empty($trustGroupId)) {
-        $uploadsById = $this->getAllUploads();
-      } else {
-        $uploadsById = $this->prepareFolderUploads($folderId, $trustGroupId);
-      }
-      return new JsonResponse($uploadsById, JsonResponse::HTTP_OK);
+        if ($ajax === 'getOsselotVersions') {
+          $pkg = trim($request->get('pkg', $request->get('osselotPackage', '')));
+            if ($pkg === '') {
+                return new JsonResponse([], JsonResponse::HTTP_OK);
+            }
+            $helper = new OsselotLookupHelper();
+            try {
+                $versions = $helper->getVersions($pkg);
+            } catch (\Exception $e) {
+                $versions = [];
+            }
+            return new JsonResponse($versions, JsonResponse::HTTP_OK);
+        }
+
+        return new Response('called without valid method', Response::HTTP_METHOD_NOT_ALLOWED);
     }
 
-    return new Response('called without valid method', Response::HTTP_METHOD_NOT_ALLOWED);
-  }
+    /**
+     * Render the reuse UI, including OSSelot section
+     */
+    public function renderContent(&$vars)
+    {
+        if (!isset($vars['folderStructure'])) {
+            $rootId = $this->folderDao->getRootFolder(Auth::getUserId())->getId();
+            $vars['folderStructure'] = $this->folderDao->getFolderStructure($rootId);
+        }
+        if ($this->folderDao->isWithoutReusableFolders($vars['folderStructure'])) {
+            return '';
+        }
 
-  /**
-   * @brief For a given folder group, extract forder id and trust group id
-   * @param array $folderGroup
-   * @return int[]
-   */
-  public function getFolderIdAndTrustGroup($folderGroup)
-  {
-    $folderGroupPair = explode(',', $folderGroup,2);
-    if (count($folderGroupPair) == 2) {
-      list($folder, $trustGroup) = $folderGroupPair;
-      $folderId = intval($folder);
-      $trustGroupId = intval($trustGroup);
-    } else {
-      $trustGroupId = Auth::getGroupId();
-      $folderId = 0;
-    }
-    return array($folderId, $trustGroupId);
-  }
+        $pair = $vars[self::FOLDER_PARAMETER_NAME] ?? '';
+        list($fid, $tgid) = $this->getFolderIdAndTrustGroup($pair);
+        if (empty($fid) && !empty($vars['folderStructure'])) {
+            $fid = $vars['folderStructure'][0][FolderDao::FOLDER_KEY]->getId();
+        }
 
-  /**
-   * @brief Load the data in array and render twig template
-   * @param[in,out] array $vars
-   * @return string
-   */
-  public function renderContent(&$vars)
-  {
-    if (!array_key_exists('folderStructure', $vars)) {
-      $rootFolderId = $this->folderDao->getRootFolder(Auth::getUserId())->getId();
-      $vars['folderStructure'] = $this->folderDao->getFolderStructure($rootFolderId);
-    }
-    if ($this->folderDao->isWithoutReusableFolders($vars['folderStructure'])) {
-      return '';
-    }
-    $pair = array_key_exists(self::FOLDER_PARAMETER_NAME, $vars) ? $vars[self::FOLDER_PARAMETER_NAME] : '';
+        $vars['reuseFolderSelectorName']    = self::REUSE_FOLDER_SELECTOR_NAME;
+        $vars['folderParameterName']        = self::FOLDER_PARAMETER_NAME;
+        $vars['uploadToReuseSelectorName']  = self::UPLOAD_TO_REUSE_SELECTOR_NAME;
+        $vars['folderUploads']              = $this->prepareFolderUploads($fid, $tgid);
 
-    list($folderId, $trustGroupId) = $this->getFolderIdAndTrustGroup($pair);
-    if (empty($folderId) && !empty($vars['folderStructure'])) {
-      $folderId = $vars['folderStructure'][0][FolderDao::FOLDER_KEY]->getId();
+        // OSSelot feature toggle
+        $vars['osselotAvailable'] = true;
+        // default package name (e.g. from upload filename base)
+        $vars['defaultPkgName']  = $vars['uploadFilename'] ?? 'angular';
+        // whether current user is admin (for showing 'New license' option)
+        $vars['userIsAdmin']     = false;
+
+        $twig = $this->getObject('twig.environment');
+        return $twig->load('agent_reuser.html.twig')->render($vars);
     }
 
-    $vars['reuseFolderSelectorName'] = self::REUSE_FOLDER_SELECTOR_NAME;
-    $vars['folderParameterName'] = self::FOLDER_PARAMETER_NAME;
-    $vars['uploadToReuseSelectorName'] = self::UPLOAD_TO_REUSE_SELECTOR_NAME;
-    $vars['folderUploads'] = $this->prepareFolderUploads($folderId, $trustGroupId);
+    /**
+     * Render JS behaviors
+     */
+    public function renderFoot(&$vars)
+    {
+        $vars['reuseFolderSelectorName']    = self::REUSE_FOLDER_SELECTOR_NAME;
+        $vars['folderParameterName']        = self::FOLDER_PARAMETER_NAME;
+        $vars['uploadToReuseSelectorName']  = self::UPLOAD_TO_REUSE_SELECTOR_NAME;
+        $vars['osselotAvailable']           = true;
 
-    $renderer = $this->getObject('twig.environment');
-    return $renderer->load('agent_reuser.html.twig')->render($vars);
-  }
-
-  /**
-   * @brief Render footer template
-   * @param array $vars
-   * @return string
-   */
-  public function renderFoot(&$vars)
-  {
-    $vars['reuseFolderSelectorName'] = self::REUSE_FOLDER_SELECTOR_NAME;
-    $vars['folderParameterName'] = self::FOLDER_PARAMETER_NAME;
-    $vars['uploadToReuseSelectorName'] = self::UPLOAD_TO_REUSE_SELECTOR_NAME;
-    $renderer = $this->getObject('twig.environment');
-    return $renderer->load('agent_reuser.js.twig')->render($vars);
-  }
-
-  /**
-   * @brief Render JS inclues
-   * @param array $vars
-   * @return string
-   */
-  public function getScriptIncludes(&$vars)
-  {
-    return '<script src="scripts/tools.js" type="text/javascript"></script>';
-  }
-
-  /**
-   * @brief For a given folder id, collect all uploads
-   *
-   * Creates an array of uploads with `<upload_id,group_id>` as the key and
-   * `<upload_name> from <Y-m-d H:i> (<status>)` as value.
-   * @param int $folderId
-   * @param int $trustGroupId
-   * @return UploadProgress[]
-   */
-  protected function prepareFolderUploads($folderId, $trustGroupId=null)
-  {
-    if (empty($trustGroupId)) {
-      $trustGroupId = Auth::getGroupId();
+        $twig = $this->getObject('twig.environment');
+        return $twig->load('agent_reuser.js.twig')->render($vars);
     }
-    $folderUploads = $this->folderDao->getFolderUploads($folderId, $trustGroupId);
 
-    $uploadsById = array();
-    foreach ($folderUploads as $uploadProgress) {
-      $key = $uploadProgress->getId().','.$uploadProgress->getGroupId();
-      $display = $uploadProgress->getFilename() . _(" from ")
-               . Convert2BrowserTime(date("Y-m-d H:i:s",$uploadProgress->getTimestamp()))
-               . ' ('. $uploadProgress->getStatusString() . ')';
-      $uploadsById[$key] = $display;
+    /** Retrieve all uploads for current user */
+    private function getAllUploads(): array
+    {
+        $folders = $this->folderDao->getAllFolderIds();
+        $out = [];
+        foreach ($folders as $fid) {
+            foreach ($this->prepareFolderUploads($fid) as $k => $v) {
+                $out[$k] = $v;
+            }
+        }
+        return $out;
     }
-    return $uploadsById;
-  }
+
+    /** Build uploads list for folder/trust-group */
+    private function prepareFolderUploads($folderId, $trustGroupId = null): array
+    {
+        if ($trustGroupId === null) {
+            $trustGroupId = Auth::getGroupId();
+        }
+        $entries = $this->folderDao->getFolderUploads($folderId, $trustGroupId);
+        $out = [];
+        foreach ($entries as $up) {
+            $key = $up->getId() . ',' . $up->getGroupId();
+            $out[$key] = sprintf(
+                "%s from %s (%s)",
+                $up->getFilename(),
+                Convert2BrowserTime(date('Y-m-d H:i:s', $up->getTimestamp())),
+                $up->getStatusString()
+            );
+        }
+        return $out;
+    }
+
+    /** Split 'folder,trust' into integers */
+    private function getFolderIdAndTrustGroup(string $pair): array
+    {
+        $parts = explode(',', $pair, 2);
+        if (count($parts) === 2) {
+            return [(int)$parts[0], (int)$parts[1]];
+        }
+        return [0, Auth::getGroupId()];
+    }
 }
 
 register_plugin(new ReuserPlugin());
